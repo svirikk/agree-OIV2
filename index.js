@@ -20,21 +20,21 @@ const CONFIG = {
     'ADAUSDT': {
       minVolumeUSD: 1_000_000,
       minDominance: 65.0,
-      minPriceChange: 0.5,
+      minPriceChange: 0.6,
       cooldownMinutes: 5,
       enabled: true
     },
     'TAOUSDT': {
       minVolumeUSD: 1_500_000,
-      minDominance: 70.0,
+      minDominance: 65.0,
       minPriceChange: 0.6,
       cooldownMinutes: 5,
       enabled: true
     },
     'HYPEUSDT': {
-      minVolumeUSD: 2_000_000,
+      minVolumeUSD: 5_000_000,
       minDominance: 70.0,
-      minPriceChange: 1,
+      minPriceChange: 0.8,
       cooldownMinutes: 5,
       enabled: true
     },
@@ -90,6 +90,11 @@ const CONFIG = {
   OI_WINDOW_SECONDS: parseInt(process.env.OI_WINDOW_SECONDS) || 300, // 5 хвилин для OI аналізу
   OI_HISTORY_MINUTES: 10, // Зберігати історію на 10 хвилин
   OI_FINAL_CHECK_OFFSET_MS: 2000, // За 2 секунди до кінця хвилини робимо фінальну перевірку
+  
+  // OI Threshold Filters (мінімальні пороги для використання OI в логіці)
+  // Якщо зміни менші за ці пороги, OI не використовується і алерт йде по базовій логіці
+  OI_MIN_DELTA_PERCENT: parseFloat(process.env.OI_MIN_DELTA_PERCENT) || 0.6, // Мінімальна зміна OI (%)
+  OI_MIN_PRICE_CHANGE_PERCENT: parseFloat(process.env.OI_MIN_PRICE_CHANGE_PERCENT) || 0.35, // Мінімальна зміна ціни (%)
   
   // Trading Hours
   TRADING_HOURS_ENABLED: process.env.TRADING_HOURS_ENABLED === 'true' || false,
@@ -641,7 +646,12 @@ class SignalEngine {
         finalDirection: flowDirection,
         oiOverride: false,
         oiReason: null,
-        decision: 'NO_OI_DATA'
+        decision: 'NO_OI_DATA',
+        oiUsed: false,
+        oiDeltaPassed: false,
+        oiPricePassed: false,
+        oiMinDeltaPercent: CONFIG.OI_MIN_DELTA_PERCENT,
+        oiMinPriceChangePercent: CONFIG.OI_MIN_PRICE_CHANGE_PERCENT
       };
     }
 
@@ -653,10 +663,65 @@ class SignalEngine {
     let oiOverride = false;
     let oiReason = null;
     let decision = 'BOUNCE'; // або 'CONTINUATION'
+    let oiUsed = false; // Чи використовується OI в логіці
+    let oiDeltaPassed = false; // Чи пройдено поріг OI
+    let oiPricePassed = false; // Чи пройдено поріг ціни
 
     const { oiDeltaPct, priceDeltaPct } = oiStats;
     
-    // Визначаємо порогові значення для OI та ціни
+    // ========================================================================
+    // ПЕРЕВІРКА ПОРОГІВ OI (OI Threshold Filters)
+    // ========================================================================
+    // Якщо зміни OI або ціни менші за мінімальні пороги,
+    // OI НЕ використовується і алерт йде по базовій логіці
+    
+    const minOIDelta = CONFIG.OI_MIN_DELTA_PERCENT;
+    const minPriceChange = CONFIG.OI_MIN_PRICE_CHANGE_PERCENT;
+    
+    // Перевірка: чи достатня зміна OI?
+    oiDeltaPassed = Math.abs(oiDeltaPct) >= minOIDelta;
+    
+    // Перевірка: чи достатня зміна ціни?
+    oiPricePassed = Math.abs(priceDeltaPct) >= minPriceChange;
+    
+    // OI використовується тільки якщо обидва пороги пройдені
+    oiUsed = oiDeltaPassed && oiPricePassed;
+    
+    // Якщо пороги не пройдені - логування і повернення базової логіки
+    if (!oiUsed) {
+      const reasons = [];
+      if (!oiDeltaPassed) {
+        reasons.push(`OI Δ=${Math.abs(oiDeltaPct).toFixed(2)}% < ${minOIDelta}%`);
+      }
+      if (!oiPricePassed) {
+        reasons.push(`Price Δ=${Math.abs(priceDeltaPct).toFixed(2)}% < ${minPriceChange}%`);
+      }
+      
+      console.log(`[OI-FILTER] OI ignored for ${stats.dominantSide} flow: ${reasons.join(', ')}`);
+      
+      return {
+        type: flowType,
+        label: flowLabel,
+        emoji: flowEmoji,
+        direction: flowDirection,
+        flowDirection: flowDirection,
+        finalDirection: flowDirection,
+        oiOverride: false,
+        oiReason: `OI ignored (below threshold: ${reasons.join(', ')})`,
+        decision: 'BASE',
+        oiUsed: false,
+        oiDeltaPassed: oiDeltaPassed,
+        oiPricePassed: oiPricePassed,
+        oiMinDeltaPercent: minOIDelta,
+        oiMinPriceChangePercent: minPriceChange
+      };
+    }
+    
+    // ========================================================================
+    // OI пороги пройдені - використовуємо OI логіку
+    // ========================================================================
+    
+    // Визначаємо порогові значення для визначення напрямку
     const OI_THRESHOLD = 0.5; // 0.5% зміна OI вважається значною
     const PRICE_THRESHOLD = 0.1; // 0.1% зміна ціни
     
@@ -738,7 +803,12 @@ class SignalEngine {
       finalDirection: finalDirection,
       oiOverride: oiOverride,
       oiReason: oiReason,
-      decision: decision
+      decision: decision,
+      oiUsed: oiUsed,
+      oiDeltaPassed: oiDeltaPassed,
+      oiPricePassed: oiPricePassed,
+      oiMinDeltaPercent: CONFIG.OI_MIN_DELTA_PERCENT,
+      oiMinPriceChangePercent: CONFIG.OI_MIN_PRICE_CHANGE_PERCENT
     };
   }
 }
@@ -874,6 +944,9 @@ class AlertManager {
         oi5mAgo: freshOIStats.oi5mAgo?.toFixed(0),
         oiDeltaPct: freshOIStats.oiDeltaPct?.toFixed(2),
         priceDeltaPct: freshOIStats.priceDeltaPct?.toFixed(2),
+        oiUsed: updatedInterpretation.oiUsed,
+        oiDeltaPassed: updatedInterpretation.oiDeltaPassed,
+        oiPricePassed: updatedInterpretation.oiPricePassed,
         decision: updatedInterpretation.decision,
         finalDirection: updatedInterpretation.finalDirection
       });
@@ -955,6 +1028,13 @@ class AlertManager {
       const priceEmoji5m = oiStats.priceDeltaPct > 0 ? '📈' : oiStats.priceDeltaPct < 0 ? '📉' : '➡️';
       lines.push(`Δ Ціна (5хв): ${priceEmoji5m} ${priceSign5m}${oiStats.priceDeltaPct.toFixed(2)}%`);
       
+      // Відображення порогів OI
+      lines.push(`<code>───────────────────</code>`);
+      lines.push(`⚙️ <b>OI Filters</b>`);
+      lines.push(`Min OI Δ: ${interpretation.oiMinDeltaPercent}% ${interpretation.oiDeltaPassed ? '✅' : '❌'}`);
+      lines.push(`Min Price Δ: ${interpretation.oiMinPriceChangePercent}% ${interpretation.oiPricePassed ? '✅' : '❌'}`);
+      lines.push(`OI Used: ${interpretation.oiUsed ? '✅ YES' : '❌ NO'}`);
+      
       lines.push(`🧠 Decision: <b>${interpretation.decision}</b>`);
       
       if (interpretation.oiReason) {
@@ -997,7 +1077,13 @@ class AlertManager {
       oiDeltaPct: oiStats?.oiDeltaPct ? parseFloat(oiStats.oiDeltaPct.toFixed(4)) : null,
       priceDeltaPct: oiStats?.priceDeltaPct ? parseFloat(oiStats.priceDeltaPct.toFixed(4)) : null,
       oiOverride: interpretation.oiOverride || false,
-      oiReason: interpretation.oiReason || null
+      oiReason: interpretation.oiReason || null,
+      // Нові поля для OI фільтрів
+      oiUsed: interpretation.oiUsed || false,
+      oiDeltaPassed: interpretation.oiDeltaPassed || false,
+      oiPricePassed: interpretation.oiPricePassed || false,
+      oiMinDeltaPercent: interpretation.oiMinDeltaPercent || CONFIG.OI_MIN_DELTA_PERCENT,
+      oiMinPriceChangePercent: interpretation.oiMinPriceChangePercent || CONFIG.OI_MIN_PRICE_CHANGE_PERCENT
     };
     
     lines.push(`<code>${JSON.stringify(data)}</code>`);
@@ -1027,6 +1113,12 @@ class AlertManager {
       
       const priceSign5m = oiStats.priceDeltaPct >= 0 ? '+' : '';
       lines.push(`📈 Ціна (5хв): ${priceSign5m}${oiStats.priceDeltaPct.toFixed(2)}%`);
+      
+      // OI фільтри
+      lines.push(`⚙️ OI Used: ${interpretation.oiUsed ? 'YES ✅' : 'NO ❌'}`);
+      if (!interpretation.oiUsed) {
+        lines.push(`   (OI: ${interpretation.oiDeltaPassed ? '✅' : '❌'} | Price: ${interpretation.oiPricePassed ? '✅' : '❌'})`);
+      }
       
       lines.push(`🧠 ${interpretation.decision}`);
       
@@ -1183,6 +1275,9 @@ class MultiWebSocketManager {
       oi5mAgo: oiStats?.oi5mAgo?.toFixed(0) || 'N/A',
       oiDeltaPct: oiStats?.oiDeltaPct?.toFixed(2) || 'N/A',
       priceDeltaPct: oiStats?.priceDeltaPct?.toFixed(2) || 'N/A',
+      oiUsed: interpretation.oiUsed,
+      oiDeltaPassed: interpretation.oiDeltaPassed,
+      oiPricePassed: interpretation.oiPricePassed,
       decision: interpretation.decision,
       finalDirection: interpretation.finalDirection
     });
@@ -1277,6 +1372,10 @@ class BinanceFuturesFlowBot {
     console.log(`Символів: ${symbols.length} | Вікно: ${CONFIG.WINDOW_SECONDS}s`);
     console.log(`Open Interest: ${CONFIG.OI_ENABLED ? `✅ OKX WebSocket (вікно ${CONFIG.OI_WINDOW_SECONDS}s)` : '❌ Вимкнено'}`);
     
+    if (CONFIG.OI_ENABLED) {
+      console.log(`OI Filters: Min OI Δ=${CONFIG.OI_MIN_DELTA_PERCENT}% | Min Price Δ=${CONFIG.OI_MIN_PRICE_CHANGE_PERCENT}%`);
+    }
+    
     if (CONFIG.TRADING_HOURS_ENABLED) {
       console.log(`Trading Hours: ${CONFIG.TRADING_START_HOUR_UTC}:00-${CONFIG.TRADING_END_HOUR_UTC}:00 UTC`);
       console.log(`Поточний статус: ${CONFIG.isWithinTradingHours() ? '✅ TRADING' : '⏸️ PAUSED'}`);
@@ -1308,13 +1407,18 @@ class BinanceFuturesFlowBot {
         tradingHoursMsg = `\n⏰ Години: ${CONFIG.TRADING_START_HOUR_UTC}:00-${CONFIG.TRADING_END_HOUR_UTC}:00 UTC`;
       }
       
+      let oiFiltersMsg = '';
+      if (CONFIG.OI_ENABLED) {
+        oiFiltersMsg = `\n🔧 OI Filters: Min OI Δ=${CONFIG.OI_MIN_DELTA_PERCENT}% | Min Price Δ=${CONFIG.OI_MIN_PRICE_CHANGE_PERCENT}%`;
+      }
+      
       await this.telegram.sendMessage(
         CONFIG.TELEGRAM_CHAT_ID,
         `🚀 <b>Binance Futures Monitor Запущено (OKX OI)</b>\n\n` +
         `<b>📊 Моніторинг ${symbols.length} символів:</b>\n${startMessage}\n\n` +
         `⚙️ Формат: ${CONFIG.ALERT_FORMAT}\n` +
         `🤖 Торговий бот: ${CONFIG.TRADING_BOT_ENABLED ? 'ON' : 'OFF'}\n` +
-        `📊 Open Interest: OKX WebSocket (${CONFIG.OI_WINDOW_SECONDS}s)${tradingHoursMsg}`,
+        `📊 Open Interest: OKX WebSocket (${CONFIG.OI_WINDOW_SECONDS}s)${oiFiltersMsg}${tradingHoursMsg}`,
         { parse_mode: 'HTML' }
       );
       console.log('[TELEGRAM] ✅ Підключено\n');
