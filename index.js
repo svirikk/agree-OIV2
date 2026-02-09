@@ -20,21 +20,21 @@ const CONFIG = {
     'ADAUSDT': {
       minVolumeUSD: 1_000_000,
       minDominance: 65.0,
-      minPriceChange: 0.6,
+      minPriceChange: 0.5,
       cooldownMinutes: 5,
       enabled: true
     },
     'TAOUSDT': {
       minVolumeUSD: 1_500_000,
-      minDominance: 65.0,
+      minDominance: 70.0,
       minPriceChange: 0.6,
       cooldownMinutes: 5,
       enabled: true
     },
     'HYPEUSDT': {
-      minVolumeUSD: 5_000_000,
+      minVolumeUSD: 2_000_000,
       minDominance: 70.0,
-      minPriceChange: 0.8,
+      minPriceChange: 1,
       cooldownMinutes: 5,
       enabled: true
     },
@@ -998,15 +998,28 @@ class AlertManager {
     );
   }
 
+  // Функція для екранування HTML символів
+  escapeHtml(text) {
+    if (typeof text !== 'string') {
+      text = String(text);
+    }
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
   formatStructuredMessage(symbol, stats, interpretation, oiStats) {
     const lines = [];
     
     // Header
-    lines.push(`${interpretation.emoji} <b>${interpretation.label}</b>`);
+    lines.push(`${interpretation.emoji} <b>${this.escapeHtml(interpretation.label)}</b>`);
     lines.push(`<code>───────────────────</code>`);
     
     const cleanSymbol = symbol.replace('USDT', '');
-    lines.push(`🎯 <b>${symbol}</b> #${cleanSymbol}`);
+    lines.push(`🎯 <b>${this.escapeHtml(symbol)}</b> #${this.escapeHtml(cleanSymbol)}`);
     
     const priceSign = stats.priceChange >= 0 ? '+' : '';
     lines.push(`📈 Ціна: ${priceSign}${stats.priceChange.toFixed(2)}% | $${stats.lastPrice.toFixed(4)}`);
@@ -1035,10 +1048,10 @@ class AlertManager {
       lines.push(`Min Price Δ: ${interpretation.oiMinPriceChangePercent}% ${interpretation.oiPricePassed ? '✅' : '❌'}`);
       lines.push(`OI Used: ${interpretation.oiUsed ? '✅ YES' : '❌ NO'}`);
       
-      lines.push(`🧠 Decision: <b>${interpretation.decision}</b>`);
+      lines.push(`🧠 Decision: <b>${this.escapeHtml(interpretation.decision)}</b>`);
       
       if (interpretation.oiReason) {
-        lines.push(`💡 ${interpretation.oiReason}`);
+        lines.push(`💡 ${this.escapeHtml(interpretation.oiReason)}`);
       }
     } else if (CONFIG.OI_ENABLED) {
       lines.push(`<code>───────────────────</code>`);
@@ -1049,9 +1062,9 @@ class AlertManager {
     lines.push(`<code>───────────────────</code>`);
     
     if (interpretation.flowDirection !== interpretation.finalDirection) {
-      lines.push(`🔄 Flow: ${interpretation.flowDirection} → Final: <b>${interpretation.finalDirection}</b>`);
+      lines.push(`🔄 Flow: ${this.escapeHtml(interpretation.flowDirection)} → Final: <b>${this.escapeHtml(interpretation.finalDirection)}</b>`);
     } else {
-      lines.push(`🎯 Напрямок: <b>${interpretation.finalDirection}</b>`);
+      lines.push(`🎯 Напрямок: <b>${this.escapeHtml(interpretation.finalDirection)}</b>`);
     }
     
     lines.push(`<code>───────────────────</code>`);
@@ -1086,7 +1099,9 @@ class AlertManager {
       oiMinPriceChangePercent: interpretation.oiMinPriceChangePercent || CONFIG.OI_MIN_PRICE_CHANGE_PERCENT
     };
     
-    lines.push(`<code>${JSON.stringify(data)}</code>`);
+    // Екрануємо JSON для безпечного використання в HTML
+    const jsonString = JSON.stringify(data);
+    lines.push(`<code>${this.escapeHtml(jsonString)}</code>`);
     
     return lines.join('\n');
   }
@@ -1094,13 +1109,13 @@ class AlertManager {
   formatHumanMessage(symbol, stats, interpretation, oiStats) {
     const lines = [];
     
-    lines.push(`${interpretation.emoji} ${interpretation.label}`);
+    lines.push(`${interpretation.emoji} ${this.escapeHtml(interpretation.label)}`);
     lines.push(`💰 Об'єм: $${this.fmt(stats.totalVolume)} за ${stats.duration.toFixed(0)}с`);
-    lines.push(`📊 Домінація: ${stats.dominance.toFixed(1)}% ${interpretation.finalDirection}`);
+    lines.push(`📊 Домінація: ${stats.dominance.toFixed(1)}% ${this.escapeHtml(interpretation.finalDirection)}`);
     lines.push('━━━━━━━━━━━━━━━━━');
     
     const cleanSymbol = symbol.replace('USDT', '');
-    lines.push(`🎯 ${symbol} #${cleanSymbol}`);
+    lines.push(`🎯 ${this.escapeHtml(symbol)} #${this.escapeHtml(cleanSymbol)}`);
     
     const priceSign = stats.priceChange >= 0 ? '+' : '';
     lines.push(`📈 Δ Ціни: ${priceSign}${stats.priceChange.toFixed(2)}%`);
@@ -1120,10 +1135,10 @@ class AlertManager {
         lines.push(`   (OI: ${interpretation.oiDeltaPassed ? '✅' : '❌'} | Price: ${interpretation.oiPricePassed ? '✅' : '❌'})`);
       }
       
-      lines.push(`🧠 ${interpretation.decision}`);
+      lines.push(`🧠 ${this.escapeHtml(interpretation.decision)}`);
       
       if (interpretation.oiReason) {
-        lines.push(`💡 ${interpretation.oiReason}`);
+        lines.push(`💡 ${this.escapeHtml(interpretation.oiReason)}`);
       }
     }
     
